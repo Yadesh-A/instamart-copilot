@@ -50,8 +50,27 @@ This repository contains a 4-part data and AI pipeline that transforms raw e-com
 ### 4. Class-Balance Experiment
 Balancing the classes using oversampling caused **Recall to move the most**, jumping from ~0.809 to ~0.944, while Precision dropped. For the retention team, this means the balanced model is much better at catching almost all lapsing customers, even though it will accidentally send win-back discounts to a few loyal customers.
 
-## Part C (Ticket Triage)
-*(To be completed)*
+## Part C (Support Ticket Triage with Guardrails)
+
+### 1. Input Guardrails & PII Redaction
+* **Guardrails:** 4 empty tickets were skipped. 4 excessively long tickets (estimating up to ~734 tokens) were flagged and blocked from LLM processing to prevent context overflow.
+* **Privacy (PII):** We successfully redacted 55 emails, 91 phone numbers, and 132 order IDs using Regex substitutions `[EMAIL]`, `[PHONE]`, and `[ORDER_ID]`. 0 PII elements leaked into the LLM prompts.
+
+### 2. Resilience and Output Validation
+* **Retry Logic:** The pipeline implements exponential backoff with jitter (Base Delay = 0.05s). During a full run, it successfully caught and recovered from exactly 19 `TransientLLMError` API timeouts. 
+* **Validation:** Out of the 156 processed tickets:
+  * 135 returned valid JSON (`classified_json`).
+  * 12 returned chatty text where the category was safely extracted via keyword matching (`classified_keyword`).
+  * 9 returned hallucinated or invalid categories and were safely flagged for human review (`flagged_invalid_output`).
+
+### 3. Prompt Engineering: Zero-Shot vs Few-Shot
+* **Zero-Shot:** Reached 84.6% accuracy, costing ~65.8 tokens per classified ticket. It struggled severely with edge cases, misclassifying 8 Fraud and 6 Technical tickets as Billing.
+* **Few-Shot:** Reached 100.0% accuracy, costing ~128.7 tokens per classified ticket.
+* **Business Justification:** The Few-Shot prompt costs roughly 63 extra tokens per ticket. This cost is absolutely worth paying because misrouting a `fraud` ticket to the `billing` queue delays critical security responses, risking massive financial loss and compliance violations.
+
+### 4. Budget & Routing
+* **Cost Control:** Running the Zero-Shot pipeline with a strict budget of 6,000 tokens successfully demonstrated the cutoff, halting exactly 60 tickets with a `budget_exhausted` status.
+* **Routing Logic:** Outputs were routed dynamically. Invalid or exhausted tickets went to `human_review`. Fraud tickets were escalated to `security_team` (HIGH priority). Premium customers (based on Part B segments) were routed to `premium_desk` (HIGH priority), and all others went to the standard `support_queue`.
 
 ## Part D (RAG & Agent)
 *(To be completed)*
