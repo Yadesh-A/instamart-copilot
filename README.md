@@ -72,8 +72,41 @@ Balancing the classes using oversampling caused **Recall to move the most**, jum
 * **Cost Control:** Running the Zero-Shot pipeline with a strict budget of 6,000 tokens successfully demonstrated the cutoff, halting exactly 60 tickets with a `budget_exhausted` status.
 * **Routing Logic:** Outputs were routed dynamically. Invalid or exhausted tickets went to `human_review`. Fraud tickets were escalated to `security_team` (HIGH priority). Premium customers (based on Part B segments) were routed to `premium_desk` (HIGH priority), and all others went to the standard `support_queue`.
 
-## Part D (RAG & Agent)
-*(To be completed)*
+## Part D (Policy RAG Assistant and Refund Agent)
+
+### 1. Document Chunking & RAG Evaluation
+* **Chunking:** The 5 policy text files were split into exactly 15 chunks (40 words each, 10-word overlap). 
+* **Evaluation (Overlap 10):** 
+  * Answerable Questions: 12/12 retrieved expected doc, 12/12 contained expected fact. 
+  * Unanswerable Questions: 2/2 correctly triggered the "I could not find" fallback.
+* **Evaluation (Overlap 0):** Zero overlap caused failures. For example, "What delivery time makes a completed order eligible for a full refund?" failed because the relevant context was split across a chunk boundary, causing the LLM to miss the exact rule.
+
+### 2. Agent Scenario Results
+| Scenario | Status | Model Calls | Tokens Used |
+|---|---|---|---|
+| S1 | REFUND (128.25) | 5 | 882 |
+| S2 | REFUND (135.00) | 5 | 882 |
+| S3 | ESCALATE (1999.00) | 5 | 869 |
+| S4 | DENIED (0.00) | 4 | 593 |
+| S5 | DENIED (0.00) | 3 | 328 |
+| S6 | NOT_FOUND (0.00) | 2 | 66 |
+| S7 | FALLBACK_MAX_ITERATIONS | 6 | 2982 |
+
+### 3. Stop Safely & Resume Demonstrations
+* **Timeout & Token Limits:**
+  * Setting `token_limit=200` on S1 successfully triggered `FALLBACK_TOKEN_LIMIT`.
+  * Setting `time_limit_seconds=0` on S1 successfully triggered `FALLBACK_TIMEOUT`.
+* **Crash-and-Resume:**
+  * A simulated crash was injected after Step 2 for S1. 
+  * `resume_agent` successfully loaded the state and finished the execution. 
+  * The exact sequence of tools executed across the crash and resume was: `get_order`, `search_policy`, `calculate_refund`, `issue_refund`.
+
+### 4. ReAct vs Plan-and-Execute
+In our ReAct setup, the agent thinks and acts step-by-step. For S1 (REFUND), it took 5 calls; for S6 (NOT_FOUND), it took just 2 calls. ReAct is highly adaptable—when S6 encountered a missing order, it immediately stopped. However, ReAct is token-heavy and slower because every single step requires a round-trip to the LLM. 
+
+A Plan-and-Execute design would ask the LLM to write the whole 4-step plan upfront, and a Python engine would run it. This takes fewer LLM calls (often just 1 or 2) and fewer tokens. However, if an unexpected observation occurs (like a cancelled order or a system error), the plan breaks and requires an expensive re-planning call. 
+
+**Conclusion:** For this refund workflow, I would choose **ReAct** (or a constrained Graph-based ReAct like LangGraph). Refund policies have complex branching logic (if >45 mins, if >1000 INR). ReAct handles these dynamic conditional branches perfectly by seeing the real output of `calculate_refund` before deciding whether to call `issue_refund` or `escalate_to_human`.
 
 ## Limitations and Next Steps
 * The Premium flag is a post-hoc whole-window label, making the retention list illustrative rather than a strict leakage-free evaluation.
